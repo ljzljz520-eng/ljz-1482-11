@@ -1,11 +1,11 @@
 {
-  "name": "park-intro-frontend",
+  "name": "yunxi-studio-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -18,7 +18,8 @@
     "video.js": "^8.10.0",
     "zustand": "^4.5.2",
     "clsx": "^2.1.0",
-    "react-hot-toast": "^2.4.1"
+    "react-hot-toast": "^2.4.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",

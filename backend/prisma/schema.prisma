@@ -1,0 +1,150 @@
+// Yunxi Studio data model
+// Draft identity, idempotent project creation, reference-material parse queue.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String           @id @default(uuid())
+  username        String           @unique
+  displayName     String
+  passwordHash    String
+  role            String           @default("creator") // creator | admin
+  createdAt       DateTime         @default(now())
+  permissions     UserPermission[]
+  drafts          Draft[]
+  projects        Project[]
+  idempotencyKeys IdempotencyKey[]
+  attachments     Attachment[]
+}
+
+model UserPermission {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key       String // e.g. "project:create"
+  granted   Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+/// Client-generated draft identity (uuid). Shared across tabs of the same
+/// browser profile via localStorage, so concurrent tabs convert the SAME
+/// draft row; the unique Project.draftId backstop prevents duplicates.
+model Draft {
+  id          String   @id // client-generated uuid
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  payload     Json // last synced wizard payload
+  payloadHash String
+  status      String   @default("editing") // editing | converted
+  version     Int      @default(1) // optimistic concurrency for draft sync
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  project     Project?
+
+  @@index([ownerId])
+}
+
+/// Idempotency record: one row per client request id.
+/// Same key + same payload hash  -> replay stored response (lost-response recovery)
+/// Same key + different payload  -> 409 IDEMPOTENCY_CONFLICT
+model IdempotencyKey {
+  key         String   @id
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint    String
+  payloadHash String
+  response    Json?
+  projectId   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  draftId     String   @unique // backstop: one project per draft, ever
+  draft       Draft?   @relation(fields: [draftId], references: [id])
+  title       String
+  contentType String
+  audience    String
+  durationSec Int
+  aspectRatio String
+  brief       String   @default("")
+  snapshot    Json // frozen summary, immutable after creation
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  materials   ReferenceMaterial[]
+  attachments Attachment[]
+
+  @@index([ownerId])
+}
+
+model ReferenceMaterial {
+  id              String     @id @default(uuid())
+  projectId       String
+  project         Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  url             String
+  version         Int        @default(1) // bumped when user edits the link mid-parse
+  formatStatus    String // valid | invalid
+  reachability    String     @default("unknown") // unknown | checking | reachable | unreachable
+  licenseStatus   String     @default("unverified") // unverified | confirmed | rejected
+  licenseEvidence String?
+  userAttested    Boolean    @default(false)
+  parseStatus     String     @default("queued") // queued | parsing | parsed | failed
+  parsedMeta      Json?
+  lastError       String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  jobs            ParseJob[]
+
+  @@index([projectId])
+}
+
+/// Independent parse queue. Jobs carry the material version they were
+/// created for; results are discarded when the material has moved on.
+model ParseJob {
+  id              String            @id @default(uuid())
+  materialId      String
+  material        ReferenceMaterial @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  materialVersion Int
+  status          String            @default("queued") // queued | running | done | failed | stale
+  attempt         Int               @default(0)
+  lastError       String?
+  runAfter        DateTime          @default(now())
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([status, runAfter])
+}
+
+model Attachment {
+  id          String   @id @default(uuid())
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  draftId     String
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  fileName    String
+  mimeType    String
+  sizeBytes   Int
+  status      String   @default("uploading") // uploading | uploaded | failed
+  storagePath String?
+  error       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([draftId])
+  @@index([projectId])
+}

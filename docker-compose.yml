@@ -1,13 +1,73 @@
-version: "3.9"
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: yunxi-db
+    environment:
+      POSTGRES_USER: park
+      POSTGRES_PASSWORD: park
+      POSTGRES_DB: park
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U park -d park"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - yunxi-net
+
+  backend:
+    build: ./backend
+    container_name: yunxi-backend
+    environment:
+      DATABASE_URL: postgresql://park:park@db:5432/park
+      JWT_SECRET: yunxi-studio-secret-change-in-prod
+      PORT: "8000"
+      UPLOAD_DIR: /data/uploads
+      SERVICE_NAME: backend
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - yunxi-net
+
+  worker:
+    build: ./backend
+    container_name: yunxi-worker
+    command: ["node", "dist/worker.js"]
+    environment:
+      DATABASE_URL: postgresql://park:park@db:5432/park
+      SERVICE_NAME: parse-worker
+      WORKER_INTERVAL_MS: "2000"
+    depends_on:
+      backend:
+        condition: service_started
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - yunxi-net
+
   frontend:
     build: ./frontend
-    container_name: park-frontend
+    container_name: yunxi-frontend
+    depends_on:
+      - backend
     ports:
       - "3000:80"
     restart: unless-stopped
     networks:
-      - park-net
+      - yunxi-net
+
+volumes:
+  pgdata:
+  uploads:
+
 networks:
-  park-net:
+  yunxi-net:
     driver: bridge
