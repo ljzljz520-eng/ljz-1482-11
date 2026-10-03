@@ -1,9 +1,10 @@
-node_modules
-npm-debug.log
-yarn.lock
-pnpm-lock.yaml
-frontend/dist
+**/node_modules
+**/dist
+**/*.log
 .git
 .vercel
 tmp
 .cache
+**/.DS_Store
+**/coverage
+**/.turbo

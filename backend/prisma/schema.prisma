@@ -1,0 +1,160 @@
+// Creative Studio - 数据模型
+// 核心：项目 / 幂等创建请求 / 权限 / 参考链接 / 解析任务 / 附件 / 用户会话
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  admin
+  creator
+}
+
+model User {
+  id            String       @id @default(cuid())
+  username      String       @unique
+  displayName   String
+  passwordHash  String
+  role          Role         @default(creator)
+  canCreate     Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  sessions      Session[]
+  projects      Project[]
+  permissions   Permission[]
+  stagingFiles  StagingFile[]
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  token      String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+}
+
+/// 项目初始化事务的产物。snapshot 为创建瞬间冻结的摘要（脚本页只认它）
+model Project {
+  id            String          @id @default(cuid())
+  ownerId       String
+  owner         User            @relation(fields: [ownerId], references: [id])
+  title         String
+  contentType   String
+  audience      String
+  durationSec   Int
+  aspectRatio   String
+  brief         String?
+  // 创建瞬间的冻结快照（脚本页展示，不随后续编辑变动）
+  snapshot      Json
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  draftRequest  DraftRequest?
+  permissions   Permission[]
+  references    ReferenceLink[]
+  attachments   Attachment[]
+  jobs          ParseJob[]
+
+  @@index([ownerId, createdAt])
+}
+
+/// 幂等键 + 请求载荷哈希：同号同体复用，同号异体冲突
+model DraftRequest {
+  id               String   @id @default(cuid())
+  clientRequestId  String   @unique
+  userId           String
+  // 规范化载荷哈希（hex sha256）
+  payloadHash      String
+  projectId        String   @unique
+  project          Project  @relation(fields: [projectId], references: [id])
+  createdAt        DateTime @default(now())
+
+  @@index([userId])
+}
+
+/// 权限授权：创建时必须存在有效授权，收回（revokedAt）立即生效
+model Permission {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scope       String
+  grantedBy   String
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  project     Project?  @relation(fields: [projectId], references: [id])
+  projectId   String?
+
+  @@index([userId, revokedAt])
+}
+
+/// 参考素材链接：格式校验 / 可访问 / 已获授权 是三种独立状态
+model ReferenceLink {
+  id           String          @id @default(cuid())
+  projectId    String
+  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  url          String
+  label        String?
+  formatValid  Boolean         @default(false)
+  reachability String          @default("unknown") // unknown | reachable | unreachable
+  license      String          @default("unknown") // unknown | licensed | unlicensed
+  status       String          @default("pending") // pending | parsing | done
+  addedAt      DateTime        @default(now())
+  jobs         ParseJob[]
+
+  @@index([projectId])
+}
+
+/// 独立解析队列（数据库队列；worker 通过条件 UPDATE 原子认领，无 Redis 依赖）
+model ParseJob {
+  id           String   @id @default(cuid())
+  referenceId  String
+  reference    ReferenceLink @relation(fields: [referenceId], references: [id], onDelete: Cascade)
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status       String   @default("queued") // queued | processing | done | failed
+  attempts     Int      @default(0)
+  lastError    String?
+  enqueuedAt   DateTime @default(now())
+  claimedAt    DateTime?
+  finishedAt   DateTime?
+
+  @@index([status, enqueuedAt])
+}
+
+/// 附件：本机暂存 -> 上传中 -> 已入项目；配额不足等状态显式可见
+model Attachment {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fileName    String
+  mime        String
+  sizeBytes   Int
+  status      String   @default("uploading") // pending_local | uploading | uploaded | failed | quota_exceeded
+  progressPct Int      @default(0)
+  storageKey  String?
+  failureNote String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId])
+}
+
+/// 创建前的临时上传暂存区（允许用户先传附件、后提交创建事务）
+model StagingFile {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileName    String
+  mime        String
+  sizeBytes   Int
+  status      String    @default("uploading") // uploading | uploaded | failed | quota_exceeded
+  storageKey  String?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+}
